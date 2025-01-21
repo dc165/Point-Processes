@@ -1,0 +1,81 @@
+---
+title: "Hawkes Process evaluation"
+output: html_document
+date: "2025-01-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("simetasmay2017.r")
+```
+
+```{r}
+hawkes_unif_background_sampling = function(mu, phi, T_max) {
+  t = rexp(1, mu)
+  out = c(t)
+  lambda_max = mu + phi(0)
+  while(t < T_max) {
+    accepted = FALSE
+    while(!accepted) {
+      t_next = t + rexp(1, lambda_max)
+      intensity = mu + sum(phi(t_next - out))
+      u = runif(1)
+      if(u < intensity/lambda_max){
+        t = t_next
+        accepted = TRUE
+      }
+    }
+    if(t < T_max){
+      out = c(out, t)
+    }
+  }
+  out
+}
+
+plot_hawkes_intensity = function(obs, mu, phi, T_max, x_freq = .005, get_vals = FALSE){
+  x = seq(0, T_max, x_freq)
+  f = lapply(x, function(u){mu + sum(phi(u - obs[which(obs <= u)]))})
+  if(get_vals){
+    return(list("t" = x, "intensity" = f)) 
+  } else {
+    plot(x, f, type = "l")
+  }
+}
+
+plot_average_intensity = function(mu, phi, T_max, num_replicates = 1000, x_freq = .005, get_vals = FALSE){
+  events = replicate(num_replicates, hawkes_unif_background_sampling(mu, phi, T_max))
+  intensities = lapply(events, function(x){plot_hawkes_intensity(x, mu, phi, T_max, x_freq, get_vals = TRUE)[["intensity"]]})
+  intensities = matrix(unlist(intensities), ncol = num_replicates)
+  mean_intensities = apply(intensities, MARGIN = 1, mean)
+  t = seq(0, T_max, x_freq)
+  if(get_vals){
+    return(list("t" = t, "intensity" = mean_intensities))
+  } else {
+    plot(t, mean_intensities, type = "l")
+  }
+}
+
+hawkes_unif_background_likelihood = function(obs, mu, phi, T_max) {
+  
+}
+```
+
+```{r}
+set.seed(123)
+mu = 1
+a = 1
+b = -1
+K = 0.5
+T_max = 10
+phi = function(t){
+  K * exp(a + b*t)
+}
+
+res = hawkes_unif_background_sampling(mu, phi, T_max)
+plot_hawkes_intensity(res, mu, phi, T_max)
+```
+
+```{r}
+plot_average_intensity(mu, phi, T_max)
+```
+
