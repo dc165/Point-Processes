@@ -1,0 +1,54 @@
+---
+title: "mpox_EDA"
+author: "Daniel Chen"
+date: "2025-01-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(mosaic)
+library(maps)
+```
+
+```{r}
+data = read.csv("mpox_cases_XY GPS_Sept13.csv")
+data = data[data$PCR_OPX == "Positive",]
+```
+
+```{r}
+coord_incidences = paste(as.character(data$HZ_POINT_X), as.character(data$HZ_POINT_Y))
+sorted_incidences = rev(sort(tally(coord_incidences)))
+sorted_incidences[1:50]
+```
+```{r}
+unique_coords = matrix(as.numeric(unlist(strsplit(names(sorted_incidences), split = " "))), ncol = 2, byrow = T)
+```
+
+
+```{r}
+map_data_DRC <- map_data('world')[map_data('world')$region == "Democratic Republic of the Congo",]
+## The map (maps + ggplot2 )
+ggplot() +
+    ## First layer: worldwide map
+    geom_polygon(data = map_data("world"),
+                 aes(x=long, y=lat, group = group),
+                 color = '#9c9c9c', fill = '#f3f3f3') +
+    ## Second layer: Country map
+    geom_polygon(data = map_data_DRC,
+                 aes(x=long, y=lat, group = group),
+                 color = 'red', fill = 'pink') +
+    geom_point(aes(x = unique_coords[,1], 
+                   y = unique_coords[,2],
+                   colour = as.vector(sorted_incidences))) +
+    coord_map() +
+    coord_fixed(1,
+                xlim = c(13, 31),
+                ylim = c(-13, 5)) +
+    ggtitle("A map of the DRC") +
+    theme(panel.background =element_rect(fill = 'blue'))
+```
+```{r}
+data_yahuma = data[data$health_zone == "Yahuma", c("onset", "date_sampling", "HZ_POINT_X", "HZ_POINT_Y")]
+```
+

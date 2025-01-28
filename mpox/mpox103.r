@@ -5,7 +5,8 @@
 set.seed(8147) 
 ## load in data from mpox_cases_XY GPS_Sept13.xlsx 
 setwd("C:/Users/14842/Desktop/Point Processes/mpox")
-x = read.table("NSK.txt",header=T) 
+# x = read.table("NSK.txt",header=T) 
+x = data_yahuma
 
 ## x is now 50 by 4. 
 onset1 = as.Date(x[,1],"%m/%d/%y") 
@@ -110,7 +111,7 @@ sum((mysum-b)^2)
 
 sumsqstoyan(c(1,.9,7,2))
 
-theta1 = c(3,.9,7,2)
+theta1 = c(0.5,.9,7,2)
 b1 = optim(theta1,sumsqstoyan)
 b2 = optim(b1$par,sumsqstoyan,hessian=T)
 theta2 = b2$par
