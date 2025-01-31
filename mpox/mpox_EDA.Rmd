@@ -9,6 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(mosaic)
 library(maps)
+source("mpox103.r")
 ```
 
 ```{r}
@@ -49,6 +50,158 @@ ggplot() +
     theme(panel.background =element_rect(fill = 'blue'))
 ```
 ```{r}
-data_yahuma = data[data$health_zone == "Yahuma", c("onset", "date_sampling", "HZ_POINT_X", "HZ_POINT_Y")]
+data_yahuma = data[data$health_zone == "Yahuma", c("onset", "date_sampling", "date_recept_labo", "HZ_POINT_X", "HZ_POINT_Y")]
+```
+
+```{r}
+onset = as.Date(data_yahuma$onset,"%m/%d/%Y") 
+sampdate = as.Date(data_yahuma$date_sampling,"%m/%d/%Y") 
+labdate = as.Date(data_yahuma$date_recept_labo,"%m/%d/%Y")
+
+interv_onset_sampdate = as.numeric(sampdate-onset)
+interv_onset_labdate = as.numeric(labdate-onset)
+interv_sampdate_labdate = as.numeric(labdate - sampdate)
+
+var(interv_onset_labdate, na.rm = TRUE)
+var(interv_onset_sampdate, na.rm = TRUE)
+var(interv_sampdate_labdate, na.rm = TRUE)
+```
+```{r}
+plot(onset, interv_onset_labdate)
+plot(onset, interv_onset_sampdate)
+plot(onset, interv_sampdate_labdate)
+plot(interv_onset_sampdate, interv_sampdate_labdate)
+```
+
+
+
+```{r}
+clean_onset = function(data) {
+  # Remove data where n0 onset, sampling, or lab testing date is recorded
+  # data = data[!(is.na(data$onset) & is.na(data$date_sampling) & is.na(data$date_recept_labo)),]
+  data = data[!(is.na(data$onset) & is.na(data$date_sampling)),]
+  
+  # Extract date data
+  onset = julian(as.Date(data$onset,"%m/%d/%Y")) 
+  sampdate = julian(as.Date(data$date_sampling,"%m/%d/%Y")) 
+  labdate = julian(as.Date(data$date_recept_labo,"%m/%d/%Y"))
+  
+  # Obtain time between onset and sampling/lab testing dates
+  interv_onset_sampdate = na.omit(sampdate-onset)
+  interv_onset_labdate = na.omit(labdate - onset)
+  
+  # Obtain lower 95th quantile for each set of intervals
+  quantile_onset_sampdate = quantile(interv_onset_sampdate, .95, na.rm = TRUE)
+  quantile_onset_labdate = quantile(interv_onset_labdate, .95, na.rm = TRUE)
+  reduced_onset_sampdate = interv_onset_sampdate[interv_onset_sampdate < quantile_onset_sampdate]
+  reduced_onset_labdate = interv_onset_labdate[interv_onset_labdate < quantile_onset_labdate]
+  
+  # If onset data is missing, interpolate by subtracting sampled interval from appropriate date
+  # sample from lower 95th quantile for variance reduction
+  for(idx in which(is.na(onset))) {
+    if(is.na(sampdate[idx])) {
+      onset[idx] = labdate[idx] - sample(reduced_onset_labdate, 1)
+    } else {
+      onset[idx] = sampdate[idx] - sample(reduced_onset_sampdate, 1)
+    }
+  }
+  data$onset = onset
+  data
+}
+```
+
+```{r}
+clean_yahuma = clean_onset(data_yahuma)
+```
+
+```{r}
+fit_hawkes_sg = function(data, params) {
+  onset = data$onset
+  onset = onset - (min(onset)-1)
+  z = list() 
+  z$t = sort(onset) # I sorted them here. 
+  z$n = length(z$t)
+  z$lon = c(runif(z$n))
+  z$lat = c(runif(z$n))
+  T = max(z$t) + 1
+  X1 = 1
+  Y1 = 1
+  M0 = 3.5
+  m3 = function(x) signif(x,3) 
+  
+  # Construct a list, wbin, where wbin[[17]] = c() if bin 17 is empty, and 
+  # if wbin[[17]] = c(1,2,10), then points 1,2,and 10 are in bin 17. 
+  # I will have 10 x 10 x 10 = 1000 bins. 
+  wbin = list()
+  for(i in 1:1000) wbin[[i]] = c(0)
+  for(m in 1:z$n) {
+      gridindex = 10*10*floor(z$t[m]*10/T)+
+      10*floor(z$lon[m]*10/X1)+ceiling(z$lat[m]*10/Y1)
+      wbin[[gridindex]] = c(wbin[[gridindex]],m)
+  }
+  for(i in 1:1000) wbin[[i]] = wbin[[i]][-1]
+  sumsqstoyan = function(theta,draw=0){
+    mu = theta[1]; K = theta[2]; tmean = theta[3]; tsd = theta[4]  
+    # cat("\n mu = ",m3(mu),", K = ",m3(K),", tmean = ",m3(tmean),", tsd = ",m3(tsd),".\n") 
+    if(min(mu,K,tmean,tsd)<0.000000001) return(99999) 
+    if(K>.99999) return(99999)
+    if(draw){
+    r = seq(0,3,length=100)
+    t = alpha/pi * exp(-alpha * r^2)
+    lines(r,t,col="orange",lty=2) 
+    }
+    const = K
+    b = T*X1*Y1/10/10/10
+    mysum = rep(b,1000)
+    for(i in 1:1000){ # i is the bin index. 
+        if(length(wbin[[i]]) > .5){
+           mysum[i] = 0
+           for(j in wbin[[i]]){ # j is the index of a point in bin i. 
+               gkj = 0
+               if(j>1) for(k in 1:(j-1)){ # k are indices of previous points. 
+                  # r2 = (z$lon[j]-z$lon[k])^2+(z$lat[j]-z$lat[k])^2
+                  gkj = gkj + dnorm(z$t[j]-z$t[k],mean=tmean,sd=tsd)
+               }
+           lambdaj = mu/X1/Y1 + const*gkj
+           if(lambdaj < 0){
+    	   cat("lambda ",j," is less than 0.")
+    	   return(99999)
+           }
+           mysum[i] = mysum[i] + 1/lambdaj
+           }
+        }
+    }
+    if(draw) lines(r,t,col="white",lty=2) 
+    sum((mysum-b)^2)
+  }
+  b1 = optim(params,sumsqstoyan)
+  b2 = optim(b1$par,sumsqstoyan,hessian=T)
+  b2$par
+}
+```
+
+```{r}
+params = c(0.5,.9,7,2)
+res = fit_hawkes_sg(clean_yahuma, params)
+res
+```
+```{r}
+sorted_incidences = rev(sort(tally(data$health_zone)))
+sorted_incidences[1:50]
+```
+
+```{r}
+fitted_parameters = data.frame(matrix(nrow = 0, ncol = 5))
+for(name in names(sorted_incidences[sorted_incidences >= 10])) {
+  data_HZ = data[data$health_zone == name, c("onset", "date_sampling", "date_recept_labo", "HZ_POINT_X", "HZ_POINT_Y")]
+  clean_HZ = clean_onset(data_HZ)
+  res = fit_hawkes_sg(clean_HZ, c(0.5,.9,7,2))
+  fitted_parameters = rbind(fitted_parameters, cbind(data.frame(name), matrix(res, ncol = 4)))
+}
+colnames(fitted_parameters) = c("Health Zone", "mu", "K", "tmean", "tsd")
+```
+
+```{r}
+fitted_parameters
 ```
 
