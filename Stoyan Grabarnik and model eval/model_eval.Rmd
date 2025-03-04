@@ -6,7 +6,7 @@ date: "2025-01-11"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-source("simetasmay2017.r")
+# source("simetasmay2017.r")
 ```
 
 ```{r}
@@ -63,12 +63,12 @@ hawkes_unif_background_likelihood = function(obs, mu, phi, T_max) {
 ```{r}
 set.seed(123)
 mu = 1
-a = 1
-b = -1
+a = 0.5
+b = 1
 K = 0.5
-T_max = 10
+T_max = 100
 phi = function(t){
-  K * exp(a + b*t)
+  a * b * exp(-b*t)
 }
 
 res = hawkes_unif_background_sampling(mu, phi, T_max)
@@ -78,4 +78,67 @@ plot_hawkes_intensity(res, mu, phi, T_max)
 ```{r}
 plot_average_intensity(mu, phi, T_max)
 ```
+
+```{r}
+library(stpphawkes)
+```
+
+```{r}
+set.seed(1234)
+res = simulate_temporal(1,.5,1,c(0,70),numeric())
+```
+
+
+```{r}
+mcmc_est = mcmc_temporal(res, t_max = 70)
+```
+
+```{r}
+mean(mcmc_est$mu)
+mean(mcmc_est$alpha)
+mean(mcmc_est$beta)
+```
+```{r}
+miss = c()
+t_mis = c()
+for(i in length(res):1) {
+  if(runif(1) < .05) {
+    miss = c(miss, res[i])
+    res_before = ifelse(i == 1, 0, res[i - 1])
+    res_after = ifelse(i == length(res), 70, res[i + 1])
+    t_mis = c(t_mis, res_before, res_after)
+    res = res[-i]
+  }
+}
+t_mis = matrix(t_mis, ncol = 2, byrow = TRUE)
+```
+
+```{r}
+mcmc_est_full_data = mcmc_temporal(res, t_max = 70)
+```
+```{r}
+mean(mcmc_est_full_data$mu)
+mean(mcmc_est_full_data$alpha)
+mean(mcmc_est_full_data$beta)
+```
+
+
+```{r}
+mcmc_est_interpolate_gaps = mcmc_temporal(res, t_max = 70, t_mis = t_mis)
+```
+
+```{r}
+mean(mcmc_est_interpolate_gaps$mu)
+mean(mcmc_est_interpolate_gaps$alpha)
+mean(mcmc_est_interpolate_gaps$beta)
+```
+
+```{r}
+miss
+mcmc_est_interpolate_gaps$z
+```
+
+
+
+
 
