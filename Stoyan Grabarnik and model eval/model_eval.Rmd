@@ -81,50 +81,97 @@ plot_average_intensity(mu, phi, T_max)
 
 ```{r}
 library(stpphawkes)
+library(hawkesbow)
+library(mosaic)
 ```
 
 ```{r}
 set.seed(1234)
-res = simulate_temporal(1,.5,1,c(0,70),numeric())
+mu = 1
+alpha = 0.5
+beta = 1
+T_max = 10
+res = hawkes(T_max, fun=mu, repr=alpha, family="exp", rate=beta)
 ```
-
 
 ```{r}
-mcmc_est = mcmc_temporal(res, t_max = 70)
+plot(res, intensity = TRUE)
+plot(res, intensity = FALSE)
 ```
 
 ```{r}
-mean(mcmc_est$mu)
-mean(mcmc_est$alpha)
-mean(mcmc_est$beta)
+mcmc_param <- list(n_mcmc = 30000, n_burn = 20000, sig_mu = 0.5, 
+            sig_alpha = 0.5, sig_beta = 0.5, mu_param = c(0.1, 
+                0.1), alpha_param = c(0.1, 0.1), beta_param = c(0.1, 
+                0.1))
+
+mcmc_est = mcmc_temporal(res$p, t_max = T_max, mcmc_param = mcmc_param)
 ```
+
+```{r}
+mean(mcmc_est$samps$mu)
+mean(mcmc_est$samps$alpha)
+mean(mcmc_est$samps$beta)
+```
+
+```{r}
+mle_est = temporal.mle(res$p, t_max = T_max, print = FALSE)
+```
+
+```{r}
+mle_est$mu
+mle_est$alpha
+mle_est$beta
+```
+
+
 ```{r}
 miss = c()
 t_mis = c()
 for(i in length(res):1) {
-  if(runif(1) < .05) {
+  if(runif(1) < .1) {
     miss = c(miss, res[i])
     res_before = ifelse(i == 1, 0, res[i - 1])
-    res_after = ifelse(i == length(res), 70, res[i + 1])
+    res_after = ifelse(i == length(res), T_max, res[i + 1])
     t_mis = c(t_mis, res_before, res_after)
     res = res[-i]
   }
 }
 t_mis = matrix(t_mis, ncol = 2, byrow = TRUE)
+
+# Combine consecutive segments with deleted data
+for(i in (nrow(t_mis) - 1):1) {
+  if(t_mis[i, 2] == t_mis[i + 1, 2]) {
+    t_mis = t_mis[-i,]
+  }
+}
 ```
 
 ```{r}
-mcmc_est_full_data = mcmc_temporal(res, t_max = 70)
+t_mis
+```
+
+
+```{r}
+mcmc_est_full_data = mcmc_temporal(res, t_max = T_max)
 ```
 ```{r}
 mean(mcmc_est_full_data$mu)
 mean(mcmc_est_full_data$alpha)
 mean(mcmc_est_full_data$beta)
 ```
-
+```{r}
+mle_est_full_data = temporal.mle(res, t_max = T_max, print = FALSE)
+```
 
 ```{r}
-mcmc_est_interpolate_gaps = mcmc_temporal(res, t_max = 70, t_mis = t_mis)
+mean(mle_est_full_data$mu)
+mean(mle_est_full_data$alpha)
+mean(mle_est_full_data$beta)
+```
+
+```{r}
+mcmc_est_interpolate_gaps = mcmc_temporal(res, t_max = T_max, t_mis = t_mis)
 ```
 
 ```{r}
@@ -134,11 +181,30 @@ mean(mcmc_est_interpolate_gaps$beta)
 ```
 
 ```{r}
-miss
-mcmc_est_interpolate_gaps$z
+length(miss)
+mean(mcmc_est_interpolate_gaps$z)
 ```
 
 
+```{r}
+for(i in 1:10) {
+  print(tally(mcmc_est$branching[i,], format = "proportion"))
+}
+```
+```{r}
+trigger = function(d) {
+  alpha * beta * exp(-beta * d)
+}
 
+for(i in 2:10) {
+  print(c(mu, trigger(res$p[i] - res$p[1:(i-1)])) / sum(c(mu, trigger(res$p[i] - res$p[1:(i-1)]))))
+}
+```
+
+```{r}
+rand_dat = hawkes(50, 2, 0.5, function(n){rnorm(n, 5, 1)})
+y = discrete(rand_dat, binsize = 1)
+whittle(y, "Gaussian")
+```
 
 

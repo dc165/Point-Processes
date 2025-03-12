@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(mosaic)
 library(maps)
+library(stpphawkes)
+library(hawkesbow)
 ```
 
 ```{r}
@@ -19,7 +21,8 @@ data = data[data$PCR_OPX == "Positive",]
 ```{r}
 coord_incidences = paste(as.character(data$HZ_POINT_X), as.character(data$HZ_POINT_Y))
 sorted_incidences = rev(sort(tally(coord_incidences)))
-sorted_incidences[1:50]
+
+rev(sort(tally(data$health_zone)))
 ```
 ```{r}
 unique_coords = matrix(as.numeric(unlist(strsplit(names(sorted_incidences), split = " "))), ncol = 2, byrow = T)
@@ -50,5 +53,138 @@ ggplot() +
 ```
 ```{r}
 data_yahuma = data[data$health_zone == "Yahuma", c("onset", "date_sampling", "HZ_POINT_X", "HZ_POINT_Y")]
+```
+
+```{r}
+onset_yahuma = sort(julian(as.Date(na.omit(data_yahuma$onset), "%m/%d/%Y")))
+onset_yahuma = onset_yahuma - min(onset_yahuma) + 1
+onset_yahuma
+```
+```{r}
+hist(onset_yahuma)
+```
+
+```{r}
+mcmc_param <- list(n_mcmc = 10000, n_burn = 5000, sig_mu = 0.5, 
+            sig_alpha = 0.5, sig_beta = 0.5, mu_param = c(0.1, 
+                0.1), alpha_param = c(0.1, 0.1), beta_param = c(0.1, 
+                0.1))
+
+posterior_yahuma = mcmc_temporal(onset_yahuma, t_max = 781, mcmc_param = mcmc_param, print = FALSE)
+mean(posterior_yahuma$samps$mu)
+mean(posterior_yahuma$samps$alpha)
+mean(posterior_yahuma$samps$beta)
+```
+
+```{r}
+mle_yahuma = temporal.mle(onset_yahuma, t_max = 781, print = FALSE)
+mle_yahuma
+```
+```{r}
+mle(onset_yahuma, "Exponential", 781)$par
+```
+
+```{r}
+modelling_results = data.frame(HZ = names(rev(sort(tally(data$health_zone)))))
+modelling_results$n = rev(sort(tally(data$health_zone)))
+modelling_results = modelling_results[modelling_results$n >= 25,]
+u_mle = c()
+a_mle = c()
+b_mle = c()
+u_mcmc = c()
+a_mcmc = c()
+b_mcmc = c()
+u_gauss = c()
+a_gauss = c()
+loc_gauss = c()
+scale_gauss = c()
+
+mcmc_param <- list(n_mcmc = 10000, n_burn = 5000, sig_mu = 0.5, 
+            sig_alpha = 0.5, sig_beta = 0.5, mu_param = c(0.1, 
+                0.1), alpha_param = c(0.1, 0.1), beta_param = c(0.1, 
+                0.1))
+
+for(i in 1:nrow(modelling_results)) {
+  data_HZ = data[data$health_zone == modelling_results$HZ[i], "onset"]
+  onset = sort(julian(as.Date(na.omit(data_HZ), "%m/%d/%Y")))
+  onset = onset - min(onset) + 1
+  # mle = temporal.mle(onset, t_max = max(onset) + 1, print = FALSE)
+  # u_mle = c(u_mle, mle$mu)
+  # a_mle = c(a_mle, mle$alpha)
+  # b_mle = c(b_mle, mle$beta)
+  # 
+  # 
+  # 
+  # posterior = mcmc_temporal(onset, t_max = max(onset) + 1, mcmc_param = mcmc_param, print = FALSE)
+  # u_mcmc = c(u_mcmc, mean(posterior$samps$mu))
+  # a_mcmc = c(a_mcmc, mean(posterior$samps$alpha))
+  # b_mcmc = c(b_mcmc, mean(posterior$samps$beta))
+}
+
+# modelling_results$u_mle = u_mle
+# modelling_results$a_mle = a_mle
+# modelling_results$b_mle = b_mle
+# modelling_results$u_mcmc = u_mcmc
+# modelling_results$a_mcmc = a_mcmc
+# modelling_results$b_mcmc = b_mcmc
+```
+
+```{r}
+modelling_results
+```
+
+```{r}
+SGs_mle = c()
+SGs_mcmc = c()
+
+cell_size = 3
+for(i in 1:nrow(modelling_results)) {
+  data_HZ = data[data$health_zone == modelling_results$HZ[i], "onset"]
+  onset = sort(julian(as.Date(na.omit(data_HZ), "%m/%d/%Y")))
+  onset = onset - min(onset) + 1
+  T_max = max(onset) + 1
+  cells = seq(cell_size, T_max, cell_size)
+  
+  SG_mle = 0
+  SG_mcmc = 0
+  prev = 0
+  for(cell in cells) {
+    data_cell_idx = which(onset > prev & onset < cell)
+    temp_mle = 0
+    temp_mcmc = 0
+    for(idx in data_cell_idx) {
+      temp_mle = temp_mle + 1/intensity_temporal(modelling_results$u_mle[i],
+                                   modelling_results$a_mle[i],
+                                   modelling_results$b_mle[i],
+                                   times = onset[seq_len(idx - 1)],
+                                   evalpt = onset[idx])
+      temp_mcmc = temp_mcmc + 1/intensity_temporal(modelling_results$u_mcmc[i],
+                                   modelling_results$a_mcmc[i],
+                                   modelling_results$b_mcmc[i],
+                                   times = onset[seq_len(idx - 1)],
+                                   evalpt = onset[idx])
+    }
+    temp_mle = temp_mle - cell_size
+    temp_mcmc = temp_mcmc - cell_size
+    SG_mle = SG_mle + temp_mle^2
+    SG_mcmc = SG_mcmc + temp_mcmc^2  
+  }
+  SGs_mle = c(SGs_mle, SG_mle)
+  SGs_mcmc = c(SGs_mcmc, SG_mcmc)
+}
+
+modelling_results$SGs_mle = SGs_mle
+modelling_results$SGs_mcmc = SGs_mcmc
+modelling_results
+```
+```{r}
+hist(u_mle)
+hist(a_mle)
+hist(b_mle)
+```
+```{r}
+hist(u_mcmc)
+hist(a_mcmc)
+hist(b_mcmc)
 ```
 
