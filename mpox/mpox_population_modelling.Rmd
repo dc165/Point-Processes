@@ -1,0 +1,479 @@
+---
+title: "mpox population modelling"
+author: "Daniel Chen"
+date: "2025-07-13"
+output: html_document
+---
+```{r}
+library(ggplot2)
+library(ggrastr)
+library(mosaic)
+library(sf)
+library(less)
+library(MCMCpack)
+#source("utils.R")
+```
+
+```{r}
+HZ_actual = st_read("./Health Zone geometry/RDC_Zone_de_sante_09092019.shp")
+```
+
+```{r}
+load("mpox_sep_to_dec.RData")
+data2$onset = julian(data2$onset)
+data2$onset = data2$onset - min(data2$onset)
+data = data2
+data = arrange(data, onset)
+```
+
+```{r}
+coord_incidences = paste(as.character(data$HZ_POINT_X), as.character(data$HZ_POINT_Y))
+sorted_incidences = rev(sort(tally(coord_incidences)))
+unique_coords = matrix(as.numeric(unlist(strsplit(names(sorted_incidences), split = " "))), ncol = 2, byrow = T)
+```
+
+```{r}
+map_data_DRC <- map_data('world')[map_data('world')$region == "Democratic Republic of the Congo",]
+```
+```{r}
+HZ_centoids = st_as_sf(data.frame(unique_coords), coords = 1:2)
+DRC_poly = map_data_DRC %>%
+  st_as_sf(coords = c("long", "lat")) %>%
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast("POLYGON")
+```
+
+```{r}
+HZ_voronoi = st_voronoi(st_union(HZ_centoids), st_as_sfc(DRC_poly))
+HZ_voronoi = st_intersection(st_cast(HZ_voronoi), st_union(DRC_poly))
+```
+```{r}
+plot(HZ_voronoi)
+plot(HZ_voronoi[107], col = "blue", add = TRUE)
+plot(HZ_actual[9, 9], col = "red", add = TRUE)
+```
+
+
+```{r}
+# pop = read.csv("cod_general_2020.csv") %>%
+#   st_as_sf(coords = c("longitude", "latitude"))
+# pop_DRC = st_filter(pop, DRC_poly)
+# save(pop_DRC, file = "DRC_population_points.RData")
+```
+
+```{r}
+load("DRC_population_points.RData")
+```
+
+
+```{r}
+# Note Health zone Bili has two centroids listed. One location is centered on the territory Bosobolo, the other is centered on territory Bondo.
+data[data$health_zone == "Bili",]
+```
+
+
+```{r}
+# pop_labeled = st_intersects(pop_DRC, st_sf(HZ_voronoi))
+# save(pop_labeled, file = "DRC_labeled_population_points.RData")
+```
+
+```{r}
+# pop_labeled = unlist(pop_labeled)
+# pop_DRC$cell = pop_labeled
+# save(pop_DRC, file = "DRC_population_points.RData")
+```
+
+
+
+
+```{r}
+# cell = 112
+# HZ_coords_76 = coords[pop_DRC$cell == cell,]
+# ggplot(DRC_poly) + 
+#   geom_sf(col = "red", fill = "white") + 
+#   geom_sf(data = HZ_voronoi[cell]) +
+#   geom_point(data = HZ_coords_76, aes(x = coords[pop_DRC$cell == cell, 1],
+#                  y = coords[pop_DRC$cell == cell, 2], alpha = 0.2)) +
+#   theme_bw()
+```
+
+```{r}
+plot(HZ_actual[,c("geometry", "ZSCode")])
+```
+```{r}
+plot(HZ_actual[,c("geometry", "PROVINCE")])
+```
+
+```{r}
+obs = data.frame(st_coordinates(pop_DRC$geometry))
+obs$cell = pop_DRC$cell
+obs$cod_general_2020 = pop_DRC$cod_general_2020
+```
+
+```{r}
+library(dplyr)
+mean_density = obs %>% 
+  group_by(cell) %>%
+  summarise(mean(cod_general_2020))
+which(mean_density$`mean(cod_general_2020)` == 0)
+```
+
+
+```{r}
+cartesian_distance = function(coords1, coords2) {
+  unlist(sqrt((coords1[1] - coords2[1])^2 + (coords1[2] - coords2[2])^2))
+}
+
+HZ_dist_matrix_cartesian = generate_dist_matrix(obs[!(obs$cell %in% c(107, 112)), ], 
+                                                x = "X",
+                                                y = "Y",
+                                                group = "cell", 
+                                                weights = "cod_general_2020",
+                                                dist_func = cartesian_distance,
+                                                samples_per_group = 1000)
+```
+
+```{r}
+#save(HZ_dist_matrix_cartesian, file = "cartesian HZ distance matrix.RData")
+```
+
+```{r}
+population_plot = ggplot(obs, aes(x = X, y = Y, col = cod_general_2020)) +
+  geom_polygon(data = map_data_DRC, aes(x=long, y=lat, group = group),
+                 color = 'red', fill = 'white') +
+  geom_point(alpha = 0.2, pch = ".") +
+  scale_color_continuous(low = "white", high = "black") +
+  theme_bw()
+```
+
+```{r}
+rasterise(population_plot, dpi = 500)
+```
+
+```{r}
+coords = st_coordinates(pop_DRC)
+coords = data.frame(coords)
+coords$cell = pop_DRC$cell
+# Add small amount of density for sampling cells with zero density and scale total density to 1
+coords$density = (pop_DRC$cod_general_2020 + .01)
+coords$density = coords$density / sum(coords$density)
+coords$idx = 1:nrow(coords)
+coords = as.matrix(coords)
+```
+
+```{r}
+coord_dat = st_as_sf(data, coords = c("HZ_POINT_X", "HZ_POINT_Y"))
+coord_dat = st_intersects(coord_dat, st_sf(HZ_voronoi))
+data$cell = unlist(coord_dat)
+```
+
+```{r}
+coords_cell = list()
+for(cell in 1:172) {
+  data_cell = coords[coords[,"cell"] == cell,]
+  coords_cell[[cell]] = data_cell[,c("density", "idx")]
+} 
+```
+
+```{r}
+n_data_cells = table(data$cell)
+n_coords_cells = table(coords[,"cell"])
+```
+
+```{r}
+parent_lik = function(i, j, alpha, beta, sigma) {
+  alpha * coords$density[j] * beta * exp(-beta * (data$onset[i] - data$onset[j])) *
+    1/(2*pi*sigma) * exp(-rowSums(sweep(coords[j, 1:2], 2, coords[i, 1:2])^2)/(2*sigma))
+}
+```
+
+
+```{r}
+init_obs = sort(which(data$onset <= 14))
+N = nrow(data)
+H = 172
+K = 2
+n_iter = 1000
+mu_samples = matrix(nrow = n_iter, ncol = K)
+alpha_samples = matrix(nrow = n_iter, ncol = K)
+sigma_samples = matrix(nrow = n_iter, ncol = K)
+B_samples = matrix(nrow = n_iter, ncol = N)
+kappa_samples = matrix(nrow = n_iter, ncol = N)
+theta_samples = array(dim = c(n_iter, H, K))
+beta_samples = matrix(nrow = n_iter, ncol = K)
+z_samples = matrix(nrow = n_iter, ncol = N)
+```
+
+
+```{r}
+# Initialize prior parameters
+a_mu_prior = rep(0.1, K)
+b_mu_prior = rep(0.1, K)
+a_alpha_prior = rep(0.1, K)
+b_alpha_prior = rep(0.1, K)
+a_beta_prior = rep(0.1, K)
+b_beta_prior = rep(0.1, K)
+a_sigma_prior = rep(2, K)
+b_sigma_prior = rep(2, K)
+d_theta_prior = rep(0.1, K)
+
+# Initialize latent variables
+# Sample initial location from population density
+for(h in 1:H) {
+  z_samples[1, data$cell == h] = sample(coords_cell[[h]][,"idx"], n_data_cells[h], replace = TRUE, prob = coords_cell[[h]][,"density"])
+}
+# Set background, productivity, and triggering function parameters
+for(k in 1:K) {
+  mu_samples[1,k] = 10
+  alpha_samples[1,k] = 1
+  beta_samples[1,k] = 0.1
+  sigma_samples[1,k] = 1
+}
+# Sample hyperprior of clade
+for(h in 1:H){
+  theta_samples[1,h,] = rdirichlet(1, d_theta_prior)
+}
+# Sample clade
+for(h in 1:H) {
+  kappa_samples[1, data$cell == h] = sample(1:2, n_data_cells[h], replace = TRUE, prob = theta_samples[1,h,])
+}
+# Sample Branching structure
+for(i in 1:N) {
+  onset = data$onset[i]
+  if (onset <= 14) {
+    next
+  }
+  
+  z = z_samples[1, i]
+  k = kappa_samples[1,i]
+  alpha = alpha_samples[1, k]
+  beta = beta_samples[1, k]
+  sigma = sigma_samples[1, k]
+  parents = which((data$onset < onset) & (data$onset >= onset - 14))
+  parents = parents[kappa_samples[1,parents] == k]
+  z_parents = z_samples[1, parents]
+  prob = mu_samples[1, k] * coords[z, "density"]
+  prob = c(prob, alpha * coords[z_parents, "density"] * beta * exp(-beta * (data$onset[i] - data$onset[parents])) * 1/(2*pi*sigma) * exp(-rowSums(sweep(coords[z_parents, 1:2], 2, coords[z, 1:2]))^2/(2*sigma)))
+  B_samples[1, i] = sample(c(0, parents), 1, prob = prob)
+}
+```
+
+```{r}
+
+T = max(data$onset)
+n_init = 476
+t_init = 15
+
+# Sample from posterior distribution
+for(iter in 101:1000) {
+  # Sample posterior of background, productivity, and triggering function parameters
+  for (k in 1:K) {
+    idx_k = kappa_samples[iter - 1, ] == k
+    O = which((B_samples[iter - 1, ] > 0) & idx_k)
+    # Sample mu
+    mu_samples[iter, k] = rgamma(1, a_mu_prior[k] + sum((B_samples[iter - 1, n_init:N] == 0) & idx_k[n_init:N]), b_mu_prior[k] + T)
+    
+    t_idx = data$onset[idx_k]
+    t_idx = ifelse(t_idx < t_init, t_init, t_idx)
+    D_idx = coords[z_samples[iter - 1, idx_k], "density"]
+    
+    # Sample alpha
+    alpha_k_minus = ifelse(k == K, 0, alpha_samples[iter - 1, k + 1])
+    alpha_k_plus = ifelse(k == 1, Inf, alpha_samples[iter, k - 1])
+    a_k = a_alpha_prior[k] + length(O)
+    b_k = b_alpha_prior[k] + sum(D_idx * (-exp(-beta_samples[iter - 1, k] * T) + exp(-beta_samples[iter - 1, k] * t_idx)))
+    p_minus = pgamma(alpha_k_minus, a_k, b_k)
+    p_plus = pgamma(alpha_k_plus, a_k, b_k)
+    alpha_samples[iter, k] = qgamma(runif(1, p_minus, p_plus), a_k, b_k)
+    
+    z_j = z_samples[iter - 1, O]
+    z_i = z_samples[iter - 1, B_samples[iter - 1, O]]
+    
+    # Sample sigma^2
+    sigma_samples[iter, k] = rinvgamma(1, a_sigma_prior[k] + length(O), b_sigma_prior[k] + sum((coords[z_j, 1:2] - coords[z_i, 1:2])^2)/2)
+    
+    t_j = data$onset[O]
+    t_i = data$onset[B_samples[iter - 1, O]]
+    a_beta = a_beta_prior[k] + length(O)
+    b_beta = b_beta_prior[k] + sum(t_j - t_i)
+    
+    # Sample beta
+    accept = FALSE
+    while(!accept) {
+      beta_proposal = rgamma(1, a_beta, b_beta)
+      if(runif(1) < exp(-sum(alpha_samples[iter, k] * D_idx * (-exp(-beta_proposal * T) + exp(-beta_proposal * t_idx))))) {
+        beta_samples[iter, k] = beta_proposal
+        accept = TRUE
+      }
+    }
+  }
+  
+  # Sample clade probabilities
+  for(h in 1:H) {
+    counts = as.numeric(table(factor(kappa_samples[iter - 1, data$cell == h], levels = 1:K)))
+    theta_samples[iter, h,] = rdirichlet(1, d_theta_prior + counts)
+  }
+  
+  # Label each observation with its root node
+  roots = B_samples[iter - 1, ]
+  for(i in 1:N) {
+    if(is.na(roots[i]) || (roots[i] == 0)) {
+      roots[i] = i
+    } else {
+      roots[i] = roots[roots[i]]
+    }
+  }
+  
+  for(root in as.numeric(names(table(roots)))) {
+    idx = which(roots == root)
+    O = idx[-1]
+    D_j = coords[idx, "density"]
+    t_idx = data$onset[idx]
+    t_idx = ifelse(t_idx < t_init, t_init, t_idx)
+    log_prob = log(mu_samples[iter,]) -alpha_samples[iter, ] * sum(D_j * sweep(exp(-t_idx %o% beta_samples[iter, ]), 2, exp(-beta_samples[iter, ] * T)))
+    if(length(O) > 0){
+      t_j = data$onset[O]
+      t_i = data$onset[B_samples[iter - 1, O]]
+      z_j = z_samples[iter - 1, O]
+      z_i = z_samples[iter - 1, B_samples[iter - 1, O]]
+      log_prob = log_prob + log(alpha_samples[iter, ] * beta_samples[iter, ]) - sum(t_j - t_i) * beta_samples[iter, ] - sum((coords[z_i, 1:2] - coords[z_j, 1:2])^2)/(2 * sigma_samples[iter,])
+    }
+    log_prob = log_prob - max(log_prob)
+    prob = exp(log_prob)
+    # Sample clade
+    kappa_samples[iter, idx] = sample(1:K, 1, prob = prob)
+  }
+  
+  for(i in 1:N) {
+    idx = which(B_samples[iter - 1, ] == i)
+    size_O = length(idx)
+    cell = data$cell[i]
+    D_h = coords_cell[[cell]][, "density"]
+    log_D_h = log(D_h)
+    D_idx = coords_cell[[cell]][, "idx"]
+    t_i = max(data$onset[i], t_init)
+    
+    k = kappa_samples[iter,i]
+    alpha = alpha_samples[iter, k]
+    beta = beta_samples[iter, k]
+    sigma = sigma_samples[iter, k]
+    
+    log_prob = log_D_h
+    if(is.na(B_samples[iter - 1, i])) {
+      
+    } else if(B_samples[iter - 1, i] == 0) {
+      log_prob = 2 * log_D_h
+    } else {
+      idx = c(B_samples[iter - 1, i], idx)
+    }
+    z_idx = z_samples[iter, idx]
+    z_idx[is.na(z_idx)] = z_samples[iter - 1, idx[is.na(z_idx)]]
+    log_prob = log_prob - alpha * (-exp(-beta * T) + exp(-beta * t_i))*D_h + log_D_h * size_O - 1/(2 * sigma / length(idx)) * rowSums(sweep(coords[D_idx, 1:2], 2, colSums(matrix(coords[z_idx, 1:2], ncol = 2)))^2)
+    prob = exp(log_prob - max(log_prob))
+    z_samples[iter, i] = sample(coords_cell[[cell]][,"idx"], 1, prob = prob)
+  }
+  
+  # Sample Branching structure
+  for(i in 1:N) {
+    onset = data$onset[i]
+    if (onset <= 14) {
+      next
+    }
+    
+    z = z_samples[iter, i]
+    k = kappa_samples[iter,i]
+    alpha = alpha_samples[iter, k]
+    beta = beta_samples[iter, k]
+    sigma = sigma_samples[iter, k]
+    parents = which((data$onset < onset) & (data$onset >= onset - 14))
+    parents = parents[kappa_samples[iter,parents] == k]
+    z_parents = z_samples[iter, parents]
+    log_prob = log(mu_samples[iter, k] * coords[z, "density"])
+    log_prob = c(log_prob, log(alpha * coords[z_parents, "density"] * beta) - beta * (data$onset[i] - data$onset[parents]) + log(1/(2*pi*sigma)) - rowSums(sweep(matrix(coords[z_parents, 1:2], ncol = 2), 2, coords[z, 1:2]))^2/(2*sigma))
+    prob = exp(log_prob - max(log_prob))
+    B_samples[iter, i] = sample(c(0, parents), 1, prob = prob)
+  }
+  print(iter)
+  if(iter %% 100 == 0) {
+    dir.create(file.path("MCMC outputs", paste("model", 2)), showWarnings = FALSE)
+    save(mu_samples, file = file.path("MCMC outputs", paste("model", 2), "mu_samples.RData"))
+    save(alpha_samples, file = file.path("MCMC outputs", paste("model", 2), "alpha_samples.RData"))
+    save(beta_samples, file = file.path("MCMC outputs", paste("model", 2), "beta_samples.RData"))
+    save(sigma_samples, file = file.path("MCMC outputs", paste("model", 2), "sigma_samples.RData"))
+    save(B_samples, file = file.path("MCMC outputs", paste("model", 2), "B_samples.RData"))
+    save(kappa_samples, file = file.path("MCMC outputs", paste("model", 2), "kappa_samples.RData"))
+    save(z_samples, file = file.path("MCMC outputs", paste("model", 2), "z_samples.RData"))
+    save(theta_samples, file = file.path("MCMC outputs", paste("model", 2), "theta_samples.RData"))
+  }
+}
+```
+
+```{r}
+dir.create(file.path("MCMC outputs", paste("epoch", 1)), showWarnings = FALSE)
+save(mu_samples, file = file.path("MCMC outputs", paste("epoch", 1), "mu_samples.RData"))
+save(alpha_samples, file = file.path("MCMC outputs", paste("epoch", 1), "alpha_samples.RData"))
+save(beta_samples, file = file.path("MCMC outputs", paste("epoch", 1), "beta_samples.RData"))
+save(sigma_samples, file = file.path("MCMC outputs", paste("epoch", 1), "sigma_samples.RData"))
+save(B_samples, file = file.path("MCMC outputs", paste("epoch", 1), "B_samples.RData"))
+save(kappa_samples, file = file.path("MCMC outputs", paste("epoch", 1), "kappa_samples.RData"))
+save(z_samples, file = file.path("MCMC outputs", paste("epoch", 1), "z_samples.RData"))
+save(theta_samples, file = file.path("MCMC outputs", paste("epoch", 1), "theta_samples.RData"))
+```
+
+```{r}
+plot(coords[z_samples[20:100, 1], 1], coords[z_samples[20:100, 1], 2])
+plot(HZ_voronoi[data$cell[1]], add = T)
+```
+
+```{r}
+plot(20:1000, mu_samples[20:1000, 1])
+plot(20:1000, mu_samples[20:1000, 2])
+plot(mu_samples[20:1000, 1], mu_samples[20:1000, 2])
+plot(20:400, alpha_samples[20:400, 1])
+plot(20:400, alpha_samples[20:400, 2])
+plot(alpha_samples[20:1000, 1], alpha_samples[20:1000, 2])
+plot(20:1000, beta_samples[20:1000, 2])
+plot(20:1000, beta_samples[20:1000, 1])
+plot(beta_samples[20:1000, 1], beta_samples[20:1000, 2])
+plot(20:1000, sigma_samples[20:1000, 1])
+plot(20:1000, sigma_samples[20:1000, 2])
+plot(sigma_samples[20:1000, 1], sigma_samples[20:1000, 2])
+```
+```{r}
+plot(alpha_samples[20:1000, 2], sigma_samples[20:1000, 2])
+```
+
+```{r}
+kappa_props = rowSums(kappa_samples[20:1000,] - 1)/N
+hist(kappa_props, breaks = 300)
+```
+
+```{r}
+hist(theta_samples[200:1000, 156, 2], breaks = 300)
+```
+
+
+```{r}
+hist(mu_samples[20:1000, 1], breaks = 100)
+hist(mu_samples[20:1000, 2], breaks = 100)
+hist(alpha_samples[20:1000, 1], breaks = 100)
+hist(alpha_samples[20:1000, 2], breaks = 100)
+hist(beta_samples[20:1000, 1], breaks = 100)
+hist(beta_samples[20:1000, 2], breaks = 100)
+hist(sigma_samples[20:1000, 1], breaks = 100)
+hist(sigma_samples[20:1000, 2], breaks = 100)
+```
+```{r}
+plot(kappa_props, mu_samples[20:1000, 1])
+plot(kappa_props, alpha_samples[20:1000, 1])
+plot(kappa_props, beta_samples[20:1000, 1])
+plot(kappa_props, sigma_samples[20:1000, 1], ylim = c(0, 25))
+```
+
+```{r}
+plot(kappa_props, mu_samples[20:1000, 2])
+plot(kappa_props, alpha_samples[20:1000, 2])
+plot(kappa_props, beta_samples[20:1000, 2])
+plot(kappa_props, sigma_samples[20:1000, 2])
+```
+
