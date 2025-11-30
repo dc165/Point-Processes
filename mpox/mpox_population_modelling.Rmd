@@ -11,6 +11,7 @@ library(mosaic)
 library(sf)
 library(less)
 library(MCMCpack)
+library(Rmpfr)
 #source("utils.R")
 ```
 
@@ -265,7 +266,7 @@ n_init = 476
 t_init = 15
 
 # Sample from posterior distribution
-for(iter in 101:1000) {
+for(iter in 243:1000) {
   # Sample posterior of background, productivity, and triggering function parameters
   for (k in 1:K) {
     idx_k = kappa_samples[iter - 1, ] == k
@@ -282,9 +283,15 @@ for(iter in 101:1000) {
     alpha_k_plus = ifelse(k == 1, Inf, alpha_samples[iter, k - 1])
     a_k = a_alpha_prior[k] + length(O)
     b_k = b_alpha_prior[k] + sum(D_idx * (-exp(-beta_samples[iter - 1, k] * T) + exp(-beta_samples[iter - 1, k] * t_idx)))
-    p_minus = pgamma(alpha_k_minus, a_k, b_k)
-    p_plus = pgamma(alpha_k_plus, a_k, b_k)
-    alpha_samples[iter, k] = qgamma(runif(1, p_minus, p_plus), a_k, b_k)
+    if(pgamma(alpha_k_minus, a_k, b_k) == pgamma(alpha_k_plus, a_k, b_k)) {
+      p_minus = mpfr(pgamma(alpha_k_minus, a_k, b_k, log.p = TRUE), 300)
+      p_plus = mpfr(pgamma(alpha_k_plus, a_k, b_k, log.p = TRUE), 300)
+      alpha_samples[iter, k] = qgamma(as.numeric(log(runif(1) * (exp(p_plus) - exp(p_minus)) + exp(p_minus))), a_k, b_k, log.p = TRUE)
+    } else {
+      p_minus = pgamma(alpha_k_minus, a_k, b_k)
+      p_plus = pgamma(alpha_k_plus, a_k, b_k)
+      alpha_samples[iter, k] = qgamma(runif(1, p_minus, p_plus), a_k, b_k)
+    }
     
     z_j = z_samples[iter - 1, O]
     z_i = z_samples[iter - 1, B_samples[iter - 1, O]]
