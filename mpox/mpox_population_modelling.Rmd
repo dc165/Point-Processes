@@ -266,7 +266,7 @@ n_init = 476
 t_init = 15
 
 # Sample from posterior distribution
-for(iter in 243:1000) {
+for(iter in 537:1000) {
   # Sample posterior of background, productivity, and triggering function parameters
   for (k in 1:K) {
     idx_k = kappa_samples[iter - 1, ] == k
@@ -284,9 +284,15 @@ for(iter in 243:1000) {
     a_k = a_alpha_prior[k] + length(O)
     b_k = b_alpha_prior[k] + sum(D_idx * (-exp(-beta_samples[iter - 1, k] * T) + exp(-beta_samples[iter - 1, k] * t_idx)))
     if(pgamma(alpha_k_minus, a_k, b_k) == pgamma(alpha_k_plus, a_k, b_k)) {
-      p_minus = mpfr(pgamma(alpha_k_minus, a_k, b_k, log.p = TRUE), 300)
-      p_plus = mpfr(pgamma(alpha_k_plus, a_k, b_k, log.p = TRUE), 300)
-      alpha_samples[iter, k] = qgamma(as.numeric(log(runif(1) * (exp(p_plus) - exp(p_minus)) + exp(p_minus))), a_k, b_k, log.p = TRUE)
+      p_minus = pgamma(alpha_k_minus, a_k, b_k, log.p = TRUE)
+      p_plus = pgamma(alpha_k_plus, a_k, b_k, log.p = TRUE)
+      if(p_minus != -Inf) {
+        p_minus = mpfr(p_minus, ceiling(abs(log(abs(p_minus), 2))) + 64)
+      }
+      if(p_plus != 0) {
+        p_plus = mpfr(p_plus, ceiling(abs(log(abs(p_plus), 2))) + 64)
+      }
+      alpha_samples[iter, k] = qgamma(as.numeric(log(1 - exp(p_minus) - runif(1) * (exp(p_plus) - exp(p_minus)))), a_k, b_k, log.p = TRUE, lower.tail = FALSE)
     } else {
       p_minus = pgamma(alpha_k_minus, a_k, b_k)
       p_plus = pgamma(alpha_k_plus, a_k, b_k)
@@ -337,7 +343,9 @@ for(iter in 243:1000) {
     D_j = coords[idx, "density"]
     t_idx = data$onset[idx]
     t_idx = ifelse(t_idx < t_init, t_init, t_idx)
-    log_prob = log(mu_samples[iter,]) -alpha_samples[iter, ] * sum(D_j * sweep(exp(-t_idx %o% beta_samples[iter, ]), 2, exp(-beta_samples[iter, ] * T)))
+    # Burn in observation doesn't have a likelihood
+    log_prob = ifelse(root >= n_init, log(mu_samples[iter,]), 1)
+    log_prob = log_prob - alpha_samples[iter, ] * sum(D_j * sweep(exp(-t_idx %o% beta_samples[iter, ]), 2, exp(-beta_samples[iter, ] * T)))
     if(length(O) > 0){
       t_j = data$onset[O]
       t_i = data$onset[B_samples[iter - 1, O]]
@@ -416,21 +424,16 @@ for(iter in 243:1000) {
 ```
 
 ```{r}
-dir.create(file.path("MCMC outputs", paste("epoch", 1)), showWarnings = FALSE)
-save(mu_samples, file = file.path("MCMC outputs", paste("epoch", 1), "mu_samples.RData"))
-save(alpha_samples, file = file.path("MCMC outputs", paste("epoch", 1), "alpha_samples.RData"))
-save(beta_samples, file = file.path("MCMC outputs", paste("epoch", 1), "beta_samples.RData"))
-save(sigma_samples, file = file.path("MCMC outputs", paste("epoch", 1), "sigma_samples.RData"))
-save(B_samples, file = file.path("MCMC outputs", paste("epoch", 1), "B_samples.RData"))
-save(kappa_samples, file = file.path("MCMC outputs", paste("epoch", 1), "kappa_samples.RData"))
-save(z_samples, file = file.path("MCMC outputs", paste("epoch", 1), "z_samples.RData"))
-save(theta_samples, file = file.path("MCMC outputs", paste("epoch", 1), "theta_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "mu_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "alpha_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "beta_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "sigma_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "B_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "kappa_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "z_samples.RData"))
+load(file.path("MCMC outputs", paste("model", 2), "theta_samples.RData"))
 ```
 
-```{r}
-plot(coords[z_samples[20:100, 1], 1], coords[z_samples[20:100, 1], 2])
-plot(HZ_voronoi[data$cell[1]], add = T)
-```
 
 ```{r}
 plot(20:1000, mu_samples[20:1000, 1])
@@ -447,16 +450,22 @@ plot(20:1000, sigma_samples[20:1000, 2])
 plot(sigma_samples[20:1000, 1], sigma_samples[20:1000, 2])
 ```
 ```{r}
-plot(alpha_samples[20:1000, 2], sigma_samples[20:1000, 2])
+plot(alpha_samples[20:1000, 1], sigma_samples[20:1000, 1])
 ```
 
 ```{r}
 kappa_props = rowSums(kappa_samples[20:1000,] - 1)/N
-hist(kappa_props, breaks = 300)
+hist(kappa_props, breaks = 150, prob = TRUE, main = "Density of clade 2 proportions", xlab = "Proportion of total events classified as clade 2")
+```
+```{r}
+props = kappa_props <= 0.1
+props = props + ((kappa_props > 0.1) & (kappa_props <= 0.5)) * 2
+props = props + (kappa_props > 0.5) * 3
+pairs(param_samples, col = c("red", "black", "green")[props])
 ```
 
 ```{r}
-hist(theta_samples[200:1000, 156, 2], breaks = 300)
+hist(theta_samples[200:1000, 141, 2], breaks = 300)
 ```
 
 
@@ -483,4 +492,107 @@ plot(kappa_props, alpha_samples[20:1000, 2])
 plot(kappa_props, beta_samples[20:1000, 2])
 plot(kappa_props, sigma_samples[20:1000, 2])
 ```
+```{r}
+colnames(param_samples) = c("mu 1", "mu 2", "alpha 1", "alpha 2", "beta 1", "beta 2", "sigma 1", "sigma 2")
+scatterplotMatrix(param_samples)
+```
+
+
+```{r}
+param_samples = cbind(mu_samples[20:1000, ], 
+                      alpha_samples[20:1000, ],
+                      beta_samples[20:1000, ],
+                      sigma_samples[20:1000, ],
+                      kappa_props)
+# transform = rbind(colMeans(param_samples), apply(param_samples, MARGIN = 2, sd))
+# for(col in 1:9){
+#   param_samples[,col] = (param_samples[,col] - transform[1, col])/transform[2, col]
+# }
+```
+
+```{r}
+library(meanShiftR)
+posterior_modes = meanShift(param_samples, algorithm = "KDTREE", iterations = 1000, bandwidth = rep(10000, 9))
+
+modes_idx = as.numeric(names(sort(table(posterior_modes$assignment), decreasing = TRUE)[1:10]))
+modes_value = posterior_modes$value[modes_idx,]
+modes_value
+```
+```{r}
+mu = modes_value[1, 1:2]
+alpha = modes_value[1, 3:4]
+beta = modes_value[1, 5:6]
+sigma = modes_value[1, 7:8]
+cell_densities = sum(density ~ cell, data = data.frame(coords))
+
+E_count_mu = rep(0, K)
+k = 1
+for(i in 1:1) {
+  nodes = numeric(0)
+  t_max = 0
+  locs = numeric(0)
+  while(t_max < 1) {
+    t = t_max + rexp(1, mu[k])
+    if(t < 1) {
+      nodes = c(nodes, t)
+      locs = c(locs, sample(coords[,"idx"], 1))
+      t_max = t
+      E_count_mu[k] = E_count_mu[k] + 1
+    }
+  }
+  while(length(nodes) > 0) {
+    parent = nodes[1]
+    z_est = locs[1]
+    nodes = nodes[-1]
+    locs = locs[-1]
+    lambda_max = alpha[k] * coords[z_est, "density"] * beta[k]
+    accept = FALSE
+    while(!accept) {
+      t_prop = rexp(1, lambda_max)
+      lambda_t = lambda_max * exp(-beta[k] * t_prop)
+      if(runif(1) < lambda_t/lambda_max) {
+        accept = TRUE
+        if(parent + t_prop < 1) {
+          E_count_mu[k] = E_count_mu[k] + 1
+          nodes = c(nodes, t_prop)
+          nodes = c(nodes, t_prop)
+          locs = c(locs, z_est)
+          prob = coords[,"density"] * exp(-rowSums(sweep(coords[,1:2], coords[z_est, 1:2])^2)/(2 * sigma[k]))
+          locs = c(locs, sample( , 1))
+        }
+      }
+    }
+    
+    
+  }
+}
+
+for(day in t_init:T) {
+  obs_idx = which((data$onset < day) & (data$onset >= (day - 14)))
+  t_obs = data$onset[obs_idx]
+  kappa = kappa_samples[200:1000, obs_idx]
+  z = z_samples[200:1000, obs_idx]
+  E_count = 0
+  for(j in 1:801) {
+    kappa_est = kappa[j, ]
+    z_est = z_samples[j, ]
+    D_est = coords[z_est, 4]
+    alpha_est = alpha[kappa_est]
+    beta_est = beta[kappa_est]
+    
+    count = 0
+    t_max = day
+    for(idx in obs_idx) {
+      O_i = 0
+      nodes = t_obs[idx]
+      while(length(nodes) > 0) {
+        lambda_max = 
+        t_prop = 
+      }
+    }
+  }
+}
+```
+
+
 
